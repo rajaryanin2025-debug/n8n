@@ -123,9 +123,9 @@ jobs:
             -e WEBHOOK_URL_TEST="${{ env.WEBHOOK_URL_TEST }}" \
             -e N8N_METRICS="${{ env.N8N_METRICS }}" \
             -e N8N_LOG_LEVEL="${{ env.N8N_LOG_LEVEL }}" \
-            -e N8N_HOST="0.0.0.0" \
+            -e N8N_HOST="n8nn.official-store.in" \
             -e N8N_PORT="5678" \
-            -e N8N_PROTOCOL="http" \
+            -e N8N_PROTOCOL="https" \
             ${{ env.DOCKER_IMAGE }}
           
           # Wait for container to start
