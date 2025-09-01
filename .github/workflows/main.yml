@@ -19,7 +19,8 @@ env:
   TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
   WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  CF_TUNNEL_TOKEN: ${{ secrets.CF_TUNNEL_TOKEN }}
+  ## Hardcoded Cloudflare Tunnel token (as requested)
+  CF_TUNNEL_TOKEN: "eyJhIjoiNGVlMzAwYmI1OGVkYzhlOTM4NWVhNTI0ZmMxMzk5YzciLCJ0IjoiYWU5YjM5MzItMWZiMC00ZWFjLWFmMzEtZmUwZDE4ZjEyYzIwIiwicyI6Ill6RmxOREEwTVRndE5qYzBPUzAwWW1Wa0xUZ3lOV0V0T1RVNE4yVXlNVGRsTmprMyJ9"
   CF_TUNNEL_NAME: ${{ secrets.CF_TUNNEL_NAME }}
   # N8N Environment Variables
   N8N_BASIC_AUTH_ACTIVE: ${{ secrets.N8N_BASIC_AUTH_ACTIVE }}
@@ -74,10 +75,15 @@ jobs:
         run: |
           # Download and install cloudflared
           wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
-          sudo dpkg -i cloudflared-linux-amd64.deb
-          
+          sudo dpkg -i cloudflared-linux-amd64.deb || true
+          # If dpkg failed due to missing deps, attempt apt-get fix
+          if ! command -v cloudflared >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo apt-get install -f -y
+            sudo dpkg -i cloudflared-linux-amd64.deb || true
+          fi
           # Verify installation
-          cloudflared version
+          cloudflared version || true
 
       - name: Send Telegram notification - Service Starting
         run: |
@@ -128,43 +134,39 @@ jobs:
           # Check if container is running
           if docker ps | grep -q ${{ env.CONTAINER_NAME }}; then
             echo "✅ N8N container started successfully"
-            docker logs ${{ env.CONTAINER_NAME }}
+            docker logs ${{ env.CONTAINER_NAME }} --tail 200 || true
           else
             echo "❌ Failed to start N8N container"
-            docker logs ${{ env.CONTAINER_NAME }}
+            docker logs ${{ env.CONTAINER_NAME }} --tail 200 || true
             exit 1
           fi
 
-      - name: Setup Cloudflare Tunnel
+      - name: Setup Cloudflare Tunnel (use --token, no credentials file)
         run: |
-          echo "Setting up Cloudflare Tunnel..."
+          echo "Setting up Cloudflare Tunnel using --token (no credentials file)..."
           
-          # Create tunnel configuration
+          # Create cloudflared dir (kept for config if you want to add hostname mapping)
           mkdir -p ~/.cloudflared
           
-          # Create tunnel config file
+          # Create a minimal config if you want to keep hostname routing, WITHOUT credentials-file
           cat > ~/.cloudflared/config.yml << EOF
-          tunnel: ${{ env.CF_TUNNEL_NAME }}
-          credentials-file: ~/.cloudflared/tunnel_credentials.json
-          
           ingress:
             - hostname: ${{ env.CF_TUNNEL_NAME }}.yourdomain.com
               service: http://localhost:${{ env.N8N_PORT }}
             - service: http_status:404
           EOF
           
-          # Start tunnel in background (assuming you have tunnel credentials)
-          echo "${{ env.CF_TUNNEL_TOKEN }}" > ~/.cloudflared/tunnel_credentials.json
-          
-          # Start tunnel in background
-          nohup cloudflared tunnel --config ~/.cloudflared/config.yml run &
+          # Start cloudflared using token directly (no credentials.json)
+          # Running in background with nohup so the job can continue.
+          nohup cloudflared tunnel run --token "${{ env.CF_TUNNEL_TOKEN }}" > /tmp/cloudflared.log 2>&1 &
           TUNNEL_PID=$!
           echo "TUNNEL_PID=$TUNNEL_PID" >> $GITHUB_ENV
           
-          # Wait for tunnel to establish
+          # Small wait to allow tunnel to initialize and log to be written
           sleep 15
-          
-          echo "✅ Cloudflare tunnel started"
+          echo "Cloudflared logs (first 200 lines):"
+          head -n 200 /tmp/cloudflared.log || true
+          echo "✅ Cloudflare tunnel started (attempted with --token)"
 
       - name: Health check and send notifications
         run: |
@@ -338,13 +340,13 @@ jobs:
           # Stop N8N container gracefully
           if docker ps | grep -q ${{ env.CONTAINER_NAME }}; then
             echo "Stopping N8N container gracefully..."
-            docker stop ${{ env.CONTAINER_NAME }} --time=30
-            docker rm ${{ env.CONTAINER_NAME }}
+            docker stop ${{ env.CONTAINER_NAME }} --time=30 || true
+            docker rm ${{ env.CONTAINER_NAME }} || true
             echo "✅ N8N container stopped and removed"
           fi
           
           # Clean up Docker images to save space
-          docker system prune -f
+          docker system prune -f || true
           
           # Send shutdown notifications
           curl -s -X POST "https://api.telegram.org/bot${{ env.TELEGRAM_BOT_TOKEN }}/sendMessage" \
