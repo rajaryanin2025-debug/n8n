@@ -8,21 +8,44 @@ on:
         required: false
         default: 'false'
   schedule:
-    # Backup schedule trigger (optional)
     - cron: '0 */6 * * *'  # Every 6 hours as fallback
 
 env:
+  # Docker + runtime
   DOCKER_IMAGE: n8nio/n8n:latest
   CONTAINER_NAME: n8n-container
   N8N_PORT: 5678
+
+  # Notifications / triggers (keep these as secrets in GH if you prefer)
   TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
   TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
   WEBHOOK_URL_TRIGGER: ${{ secrets.WEBHOOK_URL_TRIGGER }}
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  ## Hardcoded Cloudflare Tunnel token (as requested)
+
+  # Cloudflare tunnel: hardcoded token (as requested). Recommended: move to secrets.
   CF_TUNNEL_TOKEN: "eyJhIjoiNGVlMzAwYmI1OGVkYzhlOTM4NWVhNTI0ZmMxMzk5YzciLCJ0IjoiYWU5YjM5MzItMWZiMC00ZWFjLWFmMzEtZmUwZDE4ZjEyYzIwIiwicyI6Ill6RmxOREEwTVRndE5qYzBPUzAwWW1Wa0xUZ3lOV0V0T1RVNE4yVXlNVGRsTmprMyJ9"
-  CF_TUNNEL_NAME: ${{ secrets.CF_TUNNEL_NAME }}
-  # N8N Environment Variables
+  CF_TUNNEL_NAME: ${{ secrets.CF_TUNNEL_NAME }}  # public hostname subdomain stored in secret
+
+  #############################################################################
+  # HARD-CODED N8N ENV VARS TO FIX HTTPS / MIXED CONTENT (PUBLIC URL settings) #
+  #############################################################################
+  # IMPORTANT: these tell n8n what public URL to advertise to browser clients.
+  N8N_HOST: "n8nn.official-store.in"
+  N8N_PROTOCOL: "https"
+  WEBHOOK_URL: "https://n8nn.official-store.in/"
+  # editor + API base values — front-end uses these to build XHR endpoints
+  N8N_EDITOR_BASE_URL: "https://n8nn.official-store.in/"
+  VUE_APP_URL_BASE_API: "https://n8nn.official-store.in/"
+  # If using webhook tunnel feature or separate tunnel endpoint
+  WEBHOOK_TUNNEL_URL: "https://n8nn.official-store.in/"
+  # Proxy / reverse-proxy behavior
+  N8N_PROXY_HOPS: "1"
+  # Disable telemetry (stops Rudderstack telemetry calls that attempted 0.0.0.0)
+  N8N_DIAGNOSTICS_ENABLED: "false"
+
+  #############################################################################
+  # Keep other n8n settings (left as secrets for safety; change if needed)    #
+  #############################################################################
   N8N_BASIC_AUTH_ACTIVE: ${{ secrets.N8N_BASIC_AUTH_ACTIVE }}
   N8N_BASIC_AUTH_USER: ${{ secrets.N8N_BASIC_AUTH_USER }}
   N8N_BASIC_AUTH_PASSWORD: ${{ secrets.N8N_BASIC_AUTH_PASSWORD }}
@@ -42,7 +65,7 @@ jobs:
   run-n8n:
     runs-on: ubuntu-latest
     timeout-minutes: 360  # 6 hours (GitHub's max limit)
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -62,36 +85,30 @@ jobs:
         run: |
           echo "Pulling N8N Docker image..."
           docker pull ${{ env.DOCKER_IMAGE }}
-          
-          # Create cache directory
           mkdir -p /tmp/.buildx-cache
-          
-          # Save image to cache
           docker save ${{ env.DOCKER_IMAGE }} -o /tmp/.buildx-cache/n8n-image.tar
-          
           echo "Docker image cached successfully"
 
       - name: Install Cloudflare Tunnel (cloudflared)
         run: |
-          # Download and install cloudflared
           wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           sudo dpkg -i cloudflared-linux-amd64.deb || true
-          # If dpkg failed due to missing deps, attempt apt-get fix
           if ! command -v cloudflared >/dev/null 2>&1; then
             sudo apt-get update -y
             sudo apt-get install -f -y
             sudo dpkg -i cloudflared-linux-amd64.deb || true
           fi
-          # Verify installation
           cloudflared version || true
 
       - name: Send Telegram notification - Service Starting
+        if: env.TELEGRAM_BOT_TOKEN != ''
         run: |
           curl -s -X POST "https://api.telegram.org/bot${{ env.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d chat_id="${{ env.TELEGRAM_CHAT_ID }}" \
             -d text="🚀 N8N Service Starting - Workflow ID: ${{ github.run_id }}"
 
       - name: Send webhook notification - Service Starting
+        if: env.WEBHOOK_URL_TRIGGER != ''
         run: |
           curl -s -X POST "${{ env.WEBHOOK_URL_TRIGGER }}" \
             -H "Content-Type: application/json" \
@@ -104,8 +121,8 @@ jobs:
 
       - name: Start N8N with PostgreSQL
         run: |
-          echo "Starting N8N container with PostgreSQL configuration..."
-          
+          echo "Starting N8N container with PostgreSQL configuration and public URL settings..."
+          docker rm -f ${{ env.CONTAINER_NAME }} >/dev/null 2>&1 || true
           docker run -d \
             --name ${{ env.CONTAINER_NAME }} \
             -p ${{ env.N8N_PORT }}:5678 \
@@ -123,15 +140,18 @@ jobs:
             -e WEBHOOK_URL_TEST="${{ env.WEBHOOK_URL_TEST }}" \
             -e N8N_METRICS="${{ env.N8N_METRICS }}" \
             -e N8N_LOG_LEVEL="${{ env.N8N_LOG_LEVEL }}" \
-            -e N8N_HOST="n8nn.official-store.in" \
-            -e N8N_PORT="5678" \
-            -e N8N_PROTOCOL="https" \
+            -e N8N_HOST="${{ env.N8N_HOST }}" \
+            -e N8N_PORT="${{ env.N8N_PORT }}" \
+            -e N8N_PROTOCOL="${{ env.N8N_PROTOCOL }}" \
+            -e WEBHOOK_URL="${{ env.WEBHOOK_URL }}" \
+            -e WEBHOOK_TUNNEL_URL="${{ env.WEBHOOK_TUNNEL_URL }}" \
+            -e N8N_PROXY_HOPS="${{ env.N8N_PROXY_HOPS }}" \
+            -e N8N_EDITOR_BASE_URL="${{ env.N8N_EDITOR_BASE_URL }}" \
+            -e VUE_APP_URL_BASE_API="${{ env.VUE_APP_URL_BASE_API }}" \
+            -e N8N_DIAGNOSTICS_ENABLED="${{ env.N8N_DIAGNOSTICS_ENABLED }}" \
             ${{ env.DOCKER_IMAGE }}
-          
-          # Wait for container to start
+          # allow time to boot
           sleep 30
-          
-          # Check if container is running
           if docker ps | grep -q ${{ env.CONTAINER_NAME }}; then
             echo "✅ N8N container started successfully"
             docker logs ${{ env.CONTAINER_NAME }} --tail 200 || true
@@ -141,36 +161,32 @@ jobs:
             exit 1
           fi
 
-      - name: Setup Cloudflare Tunnel (use --token, no credentials file)
+      - name: Setup Cloudflare Tunnel (use --token, ingress with httpHostHeader)
         run: |
-          echo "Setting up Cloudflare Tunnel using --token (no credentials file)..."
-          
-          # Create cloudflared dir (kept for config if you want to add hostname mapping)
+          echo "Setting up Cloudflare Tunnel using --token (no credentials file) and an ingress config that enforces Host header..."
           mkdir -p ~/.cloudflared
-          
-          # Create a minimal config if you want to keep hostname routing, WITHOUT credentials-file
-          cat > ~/.cloudflared/config.yml << EOF
+          cat > ~/.cloudflared/config.yml << 'EOF'
           ingress:
-            - hostname: ${{ env.CF_TUNNEL_NAME }}.yourdomain.com
-              service: http://localhost:${{ env.N8N_PORT }}
+            - hostname: n8nn.official-store.in
+              service: http://localhost:5678
+              originRequest:
+                # Force HTTP Host header forwarded to origin as the public hostname
+                httpHostHeader: n8nn.official-store.in
+                # If your origin uses a self-signed certificate and you want cloudflared to accept it:
+                noTLSVerify: true
             - service: http_status:404
           EOF
-          
-          # Start cloudflared using token directly (no credentials.json)
-          # Running in background with nohup so the job can continue.
+          # Start cloudflared with the user-provided token. Logs to /tmp/cloudflared.log
           nohup cloudflared tunnel run --token "${{ env.CF_TUNNEL_TOKEN }}" > /tmp/cloudflared.log 2>&1 &
           TUNNEL_PID=$!
           echo "TUNNEL_PID=$TUNNEL_PID" >> $GITHUB_ENV
-          
-          # Small wait to allow tunnel to initialize and log to be written
           sleep 15
-          echo "Cloudflared logs (first 200 lines):"
-          head -n 200 /tmp/cloudflared.log || true
-          echo "✅ Cloudflare tunnel started (attempted with --token)"
+          echo "Cloudflared logs (tail):"
+          tail -n 200 /tmp/cloudflared.log || true
+          echo "✅ Cloudflare tunnel start attempted (ingress config used)"
 
       - name: Health check and send notifications
         run: |
-          # Wait for N8N to be fully ready
           echo "Waiting for N8N to be ready..."
           for i in {1..30}; do
             if curl -f -s http://localhost:${{ env.N8N_PORT }}/healthz > /dev/null 2>&1; then
@@ -184,72 +200,66 @@ jobs:
               sleep 10
             fi
           done
-          
+
           # Send success notifications
-          curl -s -X POST "https://api.telegram.org/bot${{ env.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-            -d chat_id="${{ env.TELEGRAM_CHAT_ID }}" \
-            -d text="✅ N8N Service Started Successfully! Running for 4 hours. Workflow ID: ${{ github.run_id }}"
-          
-          curl -s -X POST "${{ env.WEBHOOK_URL_TRIGGER }}" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "status": "running",
-              "workflow_id": "${{ github.run_id }}",
-              "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
-              "message": "N8N service is running successfully",
-              "tunnel_status": "active",
-              "health_check": "passed"
-            }'
+          if [ -n "${{ env.TELEGRAM_BOT_TOKEN }}" ]; then
+            curl -s -X POST "https://api.telegram.org/bot${{ env.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+              -d chat_id="${{ env.TELEGRAM_CHAT_ID }}" \
+              -d text="✅ N8N Service Started Successfully! Running for 4 hours. Workflow ID: ${{ github.run_id }}"
+          fi
+
+          if [ -n "${{ env.WEBHOOK_URL_TRIGGER }}" ]; then
+            curl -s -X POST "${{ env.WEBHOOK_URL_TRIGGER }}" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "status": "running",
+                "workflow_id": "${{ github.run_id }}",
+                "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
+                "message": "N8N service is running successfully",
+                "tunnel_status": "active",
+                "health_check": "passed"
+              }'
+          fi
 
       - name: Keep alive for 4 hours
         run: |
           echo "🕐 Starting 4-hour keep-alive period..."
-          
           START_TIME=$(date +%s)
           FOUR_HOURS=$((4 * 60 * 60))  # 4 hours in seconds
           CHECK_INTERVAL=300           # Check every 5 minutes
-          
           while true; do
             CURRENT_TIME=$(date +%s)
             ELAPSED=$((CURRENT_TIME - START_TIME))
             REMAINING=$((FOUR_HOURS - ELAPSED))
-            
-            # Check if 4 hours have passed
             if [ $ELAPSED -ge $FOUR_HOURS ]; then
               echo "⏰ 4-hour period completed. Time to restart workflow."
               break
             fi
-            
-            # Health check
             if ! curl -f -s http://localhost:${{ env.N8N_PORT }}/healthz > /dev/null 2>&1; then
               echo "❌ Health check failed - N8N is not responding"
-              
-              # Send failure notification
-              curl -s -X POST "https://api.telegram.org/bot${{ env.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-                -d chat_id="${{ env.TELEGRAM_CHAT_ID }}" \
-                -d text="❌ N8N Health Check Failed - Restarting workflow. ID: ${{ github.run_id }}"
-              
+              if [ -n "${{ env.TELEGRAM_BOT_TOKEN }}" ]; then
+                curl -s -X POST "https://api.telegram.org/bot${{ env.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+                  -d chat_id="${{ env.TELEGRAM_CHAT_ID }}" \
+                  -d text="❌ N8N Health Check Failed - Restarting workflow. ID: ${{ github.run_id }}"
+              fi
               exit 1
             fi
-            
-            # Log progress
             MINUTES_REMAINING=$((REMAINING / 60))
             echo "⏳ N8N running healthy. Time remaining: ${MINUTES_REMAINING} minutes"
-            
-            # Send periodic status update (every 30 minutes)
             if [ $((ELAPSED % 1800)) -eq 0 ] && [ $ELAPSED -gt 0 ]; then
-              curl -s -X POST "${{ env.WEBHOOK_URL_TRIGGER }}" \
-                -H "Content-Type: application/json" \
-                -d '{
-                  "status": "running",
-                  "workflow_id": "${{ github.run_id }}",
-                  "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
-                  "elapsed_minutes": '$((ELAPSED / 60))',
-                  "remaining_minutes": '$MINUTES_REMAINING',
-                  "health_status": "healthy"
-                }'
+              if [ -n "${{ env.WEBHOOK_URL_TRIGGER }}" ]; then
+                curl -s -X POST "${{ env.WEBHOOK_URL_TRIGGER }}" \
+                  -H "Content-Type: application/json" \
+                  -d '{
+                    "status": "running",
+                    "workflow_id": "${{ github.run_id }}",
+                    "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
+                    "elapsed_minutes": '$((ELAPSED / 60))',
+                    "remaining_minutes": '$MINUTES_REMAINING',
+                    "health_status": "healthy"
+                  }'
+              fi
             fi
-            
             sleep $CHECK_INTERVAL
           done
 
@@ -257,41 +267,38 @@ jobs:
         id: trigger_next
         run: |
           echo "🔄 Triggering next workflow run..."
-          
-          # Trigger workflow dispatch
           RESPONSE=$(curl -s -w "%{http_code}" -X POST \
             -H "Authorization: Bearer ${{ env.GITHUB_TOKEN }}" \
             -H "Accept: application/vnd.github.v3+json" \
             "https://api.github.com/repos/${{ github.repository }}/actions/workflows/${{ github.workflow }}.yml/dispatches" \
             -d '{"ref":"${{ github.ref_name }}","inputs":{"manual_trigger":"auto-restart"}}')
-          
           HTTP_CODE="${RESPONSE: -3}"
-          
           if [ "$HTTP_CODE" = "204" ]; then
             echo "✅ Next workflow triggered successfully"
             echo "trigger_success=true" >> $GITHUB_OUTPUT
-            
-            # Send success notification
-            curl -s -X POST "https://api.telegram.org/bot${{ env.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-              -d chat_id="${{ env.TELEGRAM_CHAT_ID }}" \
-              -d text="🔄 Next N8N workflow triggered successfully. Current run: ${{ github.run_id }} will now shutdown."
-            
-            curl -s -X POST "${{ env.WEBHOOK_URL_TRIGGER }}" \
-              -H "Content-Type: application/json" \
-              -d '{
-                "status": "workflow_triggered",
-                "workflow_id": "${{ github.run_id }}",
-                "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
-                "message": "Next workflow run triggered successfully"
-              }'
+            if [ -n "${{ env.TELEGRAM_BOT_TOKEN }}" ]; then
+              curl -s -X POST "https://api.telegram.org/bot${{ env.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+                -d chat_id="${{ env.TELEGRAM_CHAT_ID }}" \
+                -d text="🔄 Next N8N workflow triggered successfully. Current run: ${{ github.run_id }} will now shutdown."
+            fi
+            if [ -n "${{ env.WEBHOOK_URL_TRIGGER }}" ]; then
+              curl -s -X POST "${{ env.WEBHOOK_URL_TRIGGER }}" \
+                -H "Content-Type: application/json" \
+                -d '{
+                  "status": "workflow_triggered",
+                  "workflow_id": "${{ github.run_id }}",
+                  "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
+                  "message": "Next workflow run triggered successfully"
+                }'
+            fi
           else
             echo "❌ Failed to trigger next workflow. HTTP Code: $HTTP_CODE"
             echo "trigger_success=false" >> $GITHUB_OUTPUT
-            
-            # Send failure notification
-            curl -s -X POST "https://api.telegram.org/bot${{ env.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-              -d chat_id="${{ env.TELEGRAM_CHAT_ID }}" \
-              -d text="❌ Failed to trigger next N8N workflow. HTTP: $HTTP_CODE. Manual intervention required."
+            if [ -n "${{ env.TELEGRAM_BOT_TOKEN }}" ]; then
+              curl -s -X POST "https://api.telegram.org/bot${{ env.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+                -d chat_id="${{ env.TELEGRAM_CHAT_ID }}" \
+                -d text="❌ Failed to trigger next N8N workflow. HTTP: $HTTP_CODE. Manual intervention required."
+            fi
           fi
 
       - name: Verify workflow trigger
@@ -299,24 +306,22 @@ jobs:
           if [ "${{ steps.trigger_next.outputs.trigger_success }}" = "true" ]; then
             echo "⏳ Waiting 30 seconds to verify new workflow started..."
             sleep 30
-            
-            # Check if new workflow run started
             LATEST_RUN=$(curl -s -H "Authorization: Bearer ${{ env.GITHUB_TOKEN }}" \
               "https://api.github.com/repos/${{ github.repository }}/actions/workflows/${{ github.workflow }}.yml/runs?per_page=1" \
               | jq -r '.workflow_runs[0].id')
-            
             if [ "$LATEST_RUN" != "${{ github.run_id }}" ]; then
               echo "✅ New workflow run detected: $LATEST_RUN"
-              
-              curl -s -X POST "${{ env.WEBHOOK_URL_TRIGGER }}" \
-                -H "Content-Type: application/json" \
-                -d '{
-                  "status": "verified",
-                  "old_workflow_id": "${{ github.run_id }}",
-                  "new_workflow_id": "'$LATEST_RUN'",
-                  "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
-                  "message": "Workflow succession verified successfully"
-                }'
+              if [ -n "${{ env.WEBHOOK_URL_TRIGGER }}" ]; then
+                curl -s -X POST "${{ env.WEBHOOK_URL_TRIGGER }}" \
+                  -H "Content-Type: application/json" \
+                  -d '{
+                    "status": "verified",
+                    "old_workflow_id": "${{ github.run_id }}",
+                    "new_workflow_id": "'$LATEST_RUN'",
+                    "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
+                    "message": "Workflow succession verified successfully"
+                  }'
+              fi
             else
               echo "⚠️ Could not verify new workflow run"
             fi
@@ -328,40 +333,34 @@ jobs:
         if: always()
         run: |
           echo "🛑 Starting graceful shutdown..."
-          
-          # Stop Cloudflare tunnel
           if [ ! -z "${TUNNEL_PID:-}" ]; then
             echo "Stopping Cloudflare tunnel (PID: $TUNNEL_PID)..."
             kill -TERM $TUNNEL_PID 2>/dev/null || true
             sleep 5
             kill -KILL $TUNNEL_PID 2>/dev/null || true
           fi
-          
-          # Stop N8N container gracefully
           if docker ps | grep -q ${{ env.CONTAINER_NAME }}; then
             echo "Stopping N8N container gracefully..."
             docker stop ${{ env.CONTAINER_NAME }} --time=30 || true
             docker rm ${{ env.CONTAINER_NAME }} || true
             echo "✅ N8N container stopped and removed"
           fi
-          
-          # Clean up Docker images to save space
           docker system prune -f || true
-          
-          # Send shutdown notifications
-          curl -s -X POST "https://api.telegram.org/bot${{ env.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-            -d chat_id="${{ env.TELEGRAM_CHAT_ID }}" \
-            -d text="🛑 N8N Service Shutdown Complete - Workflow ID: ${{ github.run_id }}"
-          
-          curl -s -X POST "${{ env.WEBHOOK_URL_TRIGGER }}" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "status": "shutdown",
-              "workflow_id": "${{ github.run_id }}",
-              "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
-              "message": "N8N service shutdown completed gracefully"
-            }'
-          
+          if [ -n "${{ env.TELEGRAM_BOT_TOKEN }}" ]; then
+            curl -s -X POST "https://api.telegram.org/bot${{ env.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+              -d chat_id="${{ env.TELEGRAM_CHAT_ID }}" \
+              -d text="🛑 N8N Service Shutdown Complete - Workflow ID: ${{ github.run_id }}"
+          fi
+          if [ -n "${{ env.WEBHOOK_URL_TRIGGER }}" ]; then
+            curl -s -X POST "${{ env.WEBHOOK_URL_TRIGGER }}" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "status": "shutdown",
+                "workflow_id": "${{ github.run_id }}",
+                "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
+                "message": "N8N service shutdown completed gracefully"
+              }'
+          fi
           echo "✅ Graceful shutdown completed"
 
       - name: Final status report
@@ -372,15 +371,15 @@ jobs:
           echo "Start time: ${{ github.event.created_at }}"
           echo "End time: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           echo "Trigger success: ${{ steps.trigger_next.outputs.trigger_success }}"
-          
-          # Send final status to webhook
-          curl -s -X POST "${{ env.WEBHOOK_URL_TRIGGER }}" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "status": "completed",
-              "workflow_id": "${{ github.run_id }}",
-              "start_time": "${{ github.event.created_at }}",
-              "end_time": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
-              "trigger_success": "${{ steps.trigger_next.outputs.trigger_success }}",
-              "message": "Workflow cycle completed"
-            }'
+          if [ -n "${{ env.WEBHOOK_URL_TRIGGER }}" ]; then
+            curl -s -X POST "${{ env.WEBHOOK_URL_TRIGGER }}" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "status": "completed",
+                "workflow_id": "${{ github.run_id }}",
+                "start_time": "${{ github.event.created_at }}",
+                "end_time": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
+                "trigger_success": "${{ steps.trigger_next.outputs.trigger_success }}",
+                "message": "Workflow cycle completed"
+              }'
+          fi
