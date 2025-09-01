@@ -17,7 +17,7 @@ env:
   N8N_PORT: 5678
   TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
   TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-  WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+  WEBHOOK_URL_TRIGGER: ${{ secrets.WEBHOOK_URL_TRIGGER }}
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   ## Hardcoded Cloudflare Tunnel token (as requested)
   CF_TUNNEL_TOKEN: "eyJhIjoiNGVlMzAwYmI1OGVkYzhlOTM4NWVhNTI0ZmMxMzk5YzciLCJ0IjoiYWU5YjM5MzItMWZiMC00ZWFjLWFmMzEtZmUwZDE4ZjEyYzIwIiwicyI6Ill6RmxOREEwTVRndE5qYzBPUzAwWW1Wa0xUZ3lOV0V0T1RVNE4yVXlNVGRsTmprMyJ9"
@@ -93,7 +93,7 @@ jobs:
 
       - name: Send webhook notification - Service Starting
         run: |
-          curl -s -X POST "${{ env.WEBHOOK_URL }}" \
+          curl -s -X POST "${{ env.WEBHOOK_URL_TRIGGER }}" \
             -H "Content-Type: application/json" \
             -d '{
               "status": "starting",
@@ -190,7 +190,7 @@ jobs:
             -d chat_id="${{ env.TELEGRAM_CHAT_ID }}" \
             -d text="✅ N8N Service Started Successfully! Running for 4 hours. Workflow ID: ${{ github.run_id }}"
           
-          curl -s -X POST "${{ env.WEBHOOK_URL }}" \
+          curl -s -X POST "${{ env.WEBHOOK_URL_TRIGGER }}" \
             -H "Content-Type: application/json" \
             -d '{
               "status": "running",
@@ -238,7 +238,7 @@ jobs:
             
             # Send periodic status update (every 30 minutes)
             if [ $((ELAPSED % 1800)) -eq 0 ] && [ $ELAPSED -gt 0 ]; then
-              curl -s -X POST "${{ env.WEBHOOK_URL }}" \
+              curl -s -X POST "${{ env.WEBHOOK_URL_TRIGGER }}" \
                 -H "Content-Type: application/json" \
                 -d '{
                   "status": "running",
@@ -276,7 +276,7 @@ jobs:
               -d chat_id="${{ env.TELEGRAM_CHAT_ID }}" \
               -d text="🔄 Next N8N workflow triggered successfully. Current run: ${{ github.run_id }} will now shutdown."
             
-            curl -s -X POST "${{ env.WEBHOOK_URL }}" \
+            curl -s -X POST "${{ env.WEBHOOK_URL_TRIGGER }}" \
               -H "Content-Type: application/json" \
               -d '{
                 "status": "workflow_triggered",
@@ -308,7 +308,7 @@ jobs:
             if [ "$LATEST_RUN" != "${{ github.run_id }}" ]; then
               echo "✅ New workflow run detected: $LATEST_RUN"
               
-              curl -s -X POST "${{ env.WEBHOOK_URL }}" \
+              curl -s -X POST "${{ env.WEBHOOK_URL_TRIGGER }}" \
                 -H "Content-Type: application/json" \
                 -d '{
                   "status": "verified",
@@ -353,7 +353,7 @@ jobs:
             -d chat_id="${{ env.TELEGRAM_CHAT_ID }}" \
             -d text="🛑 N8N Service Shutdown Complete - Workflow ID: ${{ github.run_id }}"
           
-          curl -s -X POST "${{ env.WEBHOOK_URL }}" \
+          curl -s -X POST "${{ env.WEBHOOK_URL_TRIGGER }}" \
             -H "Content-Type: application/json" \
             -d '{
               "status": "shutdown",
@@ -374,7 +374,7 @@ jobs:
           echo "Trigger success: ${{ steps.trigger_next.outputs.trigger_success }}"
           
           # Send final status to webhook
-          curl -s -X POST "${{ env.WEBHOOK_URL }}" \
+          curl -s -X POST "${{ env.WEBHOOK_URL_TRIGGER }}" \
             -H "Content-Type: application/json" \
             -d '{
               "status": "completed",
